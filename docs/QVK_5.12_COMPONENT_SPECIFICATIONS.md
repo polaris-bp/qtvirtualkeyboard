@@ -777,6 +777,7 @@ Item {
 ### 2.1 QVirtualKeyboardInputContext
 
 **ヘッダー**: `qvirtualkeyboardinputcontext.h`
+**プライベートヘッダー**: `qvirtualkeyboardinputcontext_p.h`
 **実装**: `qvirtualkeyboardinputcontext.cpp`
 **役割**: 入力コンテキスト管理、アプリケーション連携
 
@@ -787,8 +788,10 @@ class QVirtualKeyboardInputContext : public QObject {
     Q_OBJECT
 
     // Shift/CapsLock状態
-    Q_PROPERTY(bool shift READ isShiftActive WRITE setShift NOTIFY shiftActiveChanged)
-    Q_PROPERTY(bool capsLock READ isCapsLockActive WRITE setCapsLock NOTIFY capsLockActiveChanged)
+    Q_PROPERTY(bool shift READ isShiftActive NOTIFY shiftActiveChanged)
+    Q_PROPERTY(bool shiftActive READ isShiftActive NOTIFY shiftActiveChanged REVISION 4)
+    Q_PROPERTY(bool capsLock READ isCapsLockActive NOTIFY capsLockActiveChanged)
+    Q_PROPERTY(bool capsLockActive READ isCapsLockActive NOTIFY capsLockActiveChanged REVISION 4)
     Q_PROPERTY(bool uppercase READ isUppercase NOTIFY uppercaseChanged)
 
     // カーソル位置
@@ -808,13 +811,24 @@ class QVirtualKeyboardInputContext : public QObject {
     // 入力エンジン
     Q_PROPERTY(QVirtualKeyboardInputEngine *inputEngine READ inputEngine CONSTANT)
 
+    // 選択制御
+    Q_PROPERTY(bool selectionControlVisible READ isSelectionControlVisible NOTIFY selectionControlVisibleChanged)
+    Q_PROPERTY(bool anchorRectIntersectsClipRect READ anchorRectIntersectsClipRect NOTIFY anchorRectIntersectsClipRectChanged)
+    Q_PROPERTY(bool cursorRectIntersectsClipRect READ cursorRectIntersectsClipRect NOTIFY cursorRectIntersectsClipRectChanged)
+
     // その他
     Q_PROPERTY(bool animating READ isAnimating WRITE setAnimating NOTIFY animatingChanged)
-    Q_PROPERTY(QString locale READ locale WRITE setLocale NOTIFY localeChanged)
+    Q_PROPERTY(QString locale READ locale NOTIFY localeChanged)
     Q_PROPERTY(QObject *inputItem READ inputItem NOTIFY inputItemChanged)
-    Q_PROPERTY(ShiftHandler *shiftHandler READ shiftHandler CONSTANT)
+    Q_PROPERTY(QVirtualKeyboardInputContextPrivate *priv READ priv CONSTANT)
 };
 ```
+
+**注**: `priv`プロパティを通じて、QMLから以下のプライベート機能にアクセスできます：
+- `InputContext.priv.fileExists(url)`: レイアウトファイルの存在確認
+- `InputContext.priv.shiftHandler`: ShiftHandlerへのアクセス
+- `InputContext.priv.shadow`: ShadowInputContextへのアクセス
+- `InputContext.priv.keyboardRectangle`: キーボード矩形の設定/取得
 
 #### 主要メソッド
 
@@ -871,14 +885,48 @@ Q_INVOKABLE void sendKeyClick(int key, const QString &text, int modifiers = 0);
 InputContext.sendKeyClick(Qt.Key_A, "a", 0);
 ```
 
+##### setSelectionOnFocusObject() (選択ハンドル用)
+
+```cpp
+Q_INVOKABLE void setSelectionOnFocusObject(const QPointF &anchorPos, const QPointF &cursorPos);
+```
+
+**用途**: 選択ハンドルのドラッグ操作でテキスト選択範囲を設定
+
+**パラメータ**:
+- `anchorPos`: 選択開始位置（画面座標）
+- `cursorPos`: 選択終了位置（画面座標）
+
+**例**:
+```qml
+// SelectionControl.qmlで使用
+MouseArea {
+    onPositionChanged: {
+        var xx = x + anchorHandle.x + mouse.x
+        var yy = y + anchorHandle.y + mouse.y
+        InputContext.setSelectionOnFocusObject(Qt.point(xx, yy), ...)
+    }
+}
+```
+
 #### シグナル
 
 主要なシグナル:
 - `shiftActiveChanged()`: Shift状態変更
+- `capsLockActiveChanged()`: CapsLock状態変更
+- `uppercaseChanged()`: 大文字状態変更
 - `cursorPositionChanged()`: カーソル位置変更
+- `anchorPositionChanged()`: アンカー位置変更
 - `preeditTextChanged()`: 予測変換テキスト変更
+- `surroundingTextChanged()`: 周辺テキスト変更
+- `selectedTextChanged()`: 選択テキスト変更
+- `inputMethodHintsChanged()`: 入力ヒント変更
 - `inputItemChanged()`: フォーカスアイテム変更
 - `localeChanged()`: 言語変更
+- `selectionControlVisibleChanged()`: 選択制御表示状態変更
+- `anchorRectIntersectsClipRectChanged()`: アンカー矩形交差状態変更
+- `cursorRectIntersectsClipRectChanged()`: カーソル矩形交差状態変更
+- `animatingChanged()`: アニメーション状態変更
 
 ---
 
@@ -935,6 +983,8 @@ Q_INVOKABLE bool virtualKeyPress(Qt::Key key,
                                  Qt::KeyboardModifiers modifiers,
                                  bool repeat);
 
+Q_INVOKABLE void virtualKeyCancel();
+
 Q_INVOKABLE bool virtualKeyRelease(Qt::Key key,
                                    const QString &text,
                                    Qt::KeyboardModifiers modifiers);
@@ -945,6 +995,8 @@ Q_INVOKABLE bool virtualKeyClick(Qt::Key key,
 ```
 
 **戻り値**: 入力メソッドが処理した場合true
+
+**virtualKeyCancel()**: アクティブなキー入力をキャンセル（リピートタイマー停止等）
 
 **内部動作**:
 ```cpp
@@ -965,6 +1017,51 @@ bool QVirtualKeyboardInputEnginePrivate::virtualKeyClick(
 }
 ```
 
+##### traceBegin/traceEnd() (手書き入力用)
+
+```cpp
+Q_INVOKABLE QVirtualKeyboardTrace *traceBegin(
+    int traceId,
+    PatternRecognitionMode patternRecognitionMode,
+    const QVariantMap &traceCaptureDeviceInfo,
+    const QVariantMap &traceScreenInfo);
+
+Q_INVOKABLE bool traceEnd(QVirtualKeyboardTrace *trace);
+```
+
+**用途**: 手書き入力のトレース（筆跡）を開始/終了
+
+**戻り値**:
+- `traceBegin()`: トレースオブジェクト
+- `traceEnd()`: 認識が成功した場合true
+
+##### reselect() (単語再選択)
+
+```cpp
+Q_INVOKABLE bool reselect(int cursorPosition, const ReselectFlags &reselectFlags);
+```
+
+**用途**: カーソル位置の単語を再選択（編集中の単語を再度予測変換対象にする）
+
+**パラメータ**:
+- `cursorPosition`: カーソル位置
+- `reselectFlags`:
+  - `WordBeforeCursor`: カーソル前の単語
+  - `WordAfterCursor`: カーソル後の単語
+  - `WordAtCursor`: カーソル位置の単語全体
+
+**戻り値**: 再選択が成功した場合true
+
+##### clickPreeditText() (予測変換テキストクリック)
+
+```cpp
+bool clickPreeditText(int cursorPosition);
+```
+
+**用途**: preeditText内の特定位置をクリック（カーソル移動等）
+
+**戻り値**: 入力メソッドが処理した場合true
+
 ##### setInputMethod()
 
 ```cpp
@@ -975,30 +1072,93 @@ void setInputMethod(QVirtualKeyboardAbstractInputMethod *inputMethod);
 
 ---
 
-### 2.3 QVirtualKeyboardSettings
+### 2.3 Settings (QtVirtualKeyboard::Settings)
 
-**ヘッダー**: `qvirtualkeyboardsettings_p.h`
-**実装**: `qvirtualkeyboardsettings.cpp`
+**ヘッダー**: `settings_p.h`
+**実装**: `settings.cpp`
+**名前空間**: `QtVirtualKeyboard`
 **役割**: グローバル設定管理
 
-#### プロパティ
+**重要**: このクラスは`QtVirtualKeyboard::Settings`として定義されており、QMLからは`VirtualKeyboardSettings`としてアクセスします。
+
+#### メソッド定義
 
 ```cpp
-class QVirtualKeyboardSettings : public QObject {
+namespace QtVirtualKeyboard {
+
+class Settings : public QObject {
     Q_OBJECT
-    Q_PROPERTY(QString style READ style WRITE setStyle NOTIFY styleChanged)
-    Q_PROPERTY(QString styleName READ styleName NOTIFY styleNameChanged)
-    Q_PROPERTY(QString locale READ locale WRITE setLocale NOTIFY localeChanged)
-    Q_PROPERTY(QStringList availableLocales READ availableLocales NOTIFY availableLocalesChanged)
-    Q_PROPERTY(QStringList activeLocales READ activeLocales WRITE setActiveLocales NOTIFY activeLocalesChanged)
-    Q_PROPERTY(bool fullScreenMode READ fullScreenMode WRITE setFullScreenMode NOTIFY fullScreenModeChanged)
-    Q_PROPERTY(QString layoutPath READ layoutPath WRITE setLayoutPath NOTIFY layoutPathChanged)
+
+public:
+    static Settings *instance();
+
+    // スタイル
+    QString style() const;
+    void setStyle(const QString &style);
+    QString styleName() const;
+    void setStyleName(const QString &name);
+
+    // ロケール
+    QString locale() const;
+    void setLocale(const QString &locale);
+    QStringList availableLocales() const;
+    void setAvailableLocales(const QStringList &availableLocales);
+    QStringList activeLocales() const;
+    void setActiveLocales(const QStringList &activeLocales);
+
+    // レイアウト
+    QUrl layoutPath() const;
+    void setLayoutPath(const QUrl &layoutPath);
+
+    // 単語候補リスト (Word Candidate List)
+    int wclAutoHideDelay() const;
+    void setWclAutoHideDelay(int wclAutoHideDelay);
+    bool wclAlwaysVisible() const;
+    void setWclAlwaysVisible(bool wclAlwaysVisible);
+    bool wclAutoCommitWord() const;
+    void setWclAutoCommitWord(bool wclAutoCommitWord);
+
+    // フルスクリーンモード
+    bool fullScreenMode() const;
+    void setFullScreenMode(bool fullScreenMode);
+
+signals:
+    void styleChanged();
+    void styleNameChanged();
+    void localeChanged();
+    void availableLocalesChanged();
+    void activeLocalesChanged();
+    void layoutPathChanged();
+    void wclAutoHideDelayChanged();
+    void wclAlwaysVisibleChanged();
+    void wclAutoCommitWordChanged();
+    void fullScreenModeChanged();
 };
+
+} // namespace QtVirtualKeyboard
 ```
+
+#### プロパティ詳細
+
+| プロパティ | 型 | デフォルト | 説明 |
+|----------|-----|----------|------|
+| `style` | QString | "" | カスタムスタイルのURL |
+| `styleName` | QString | "default" | スタイル名（"default", "retro"等） |
+| `locale` | QString | システムロケール | 現在の言語ロケール |
+| `availableLocales` | QStringList | 自動検出 | 利用可能な全言語リスト |
+| `activeLocales` | QStringList | 空=全有効 | アクティブな言語リスト |
+| `layoutPath` | QUrl | qrc:/... | レイアウトファイルのパス |
+| `wclAutoHideDelay` | int | - | 単語候補リスト自動非表示遅延（ミリ秒） |
+| `wclAlwaysVisible` | bool | false | 単語候補リスト常時表示 |
+| `wclAutoCommitWord` | bool | false | 単語自動確定 |
+| `fullScreenMode` | bool | false | フルスクリーンモード |
+
+**wcl**: Word Candidate List（単語候補リスト）の略
 
 #### 使用例
 
 ```qml
+import QtQuick 2.0
 import QtQuick.VirtualKeyboard.Settings 2.2
 
 Component.onCompleted: {
@@ -1009,7 +1169,14 @@ Component.onCompleted: {
     VirtualKeyboardSettings.activeLocales = ["en_GB", "ja_JP"]
 
     // カスタムスタイル
-    VirtualKeyboardSettings.style = "qrc:/custom/style.qml"
+    VirtualKeyboardSettings.style = "qrc:/custom/mystyle.qml"
+
+    // 単語候補リスト設定
+    VirtualKeyboardSettings.wclAutoHideDelay = 5000  // 5秒後に自動非表示
+    VirtualKeyboardSettings.wclAutoCommitWord = true  // 自動確定有効
+
+    // 利用可能な言語を確認
+    console.log("Available:", VirtualKeyboardSettings.availableLocales)
 }
 ```
 
@@ -1017,8 +1184,10 @@ Component.onCompleted: {
 
 ### 2.4 AbstractInputMethod
 
-**ヘッダー**: `qvirtualkeyboardabstractinputmethod_p.h`
+**ヘッダー**: `qvirtualkeyboardabstractinputmethod.h`
 **役割**: 入力メソッドプラグインの基底クラス
+
+**注**: プライベートヘッダーは存在しません。パブリックヘッダーのみです。
 
 #### 主要仮想メソッド
 
@@ -1027,39 +1196,129 @@ class QVirtualKeyboardAbstractInputMethod : public QObject {
     Q_OBJECT
 
 public:
-    // 入力モード
-    virtual QList<InputMode> inputModes(const QString &locale) = 0;
-    virtual bool setInputMode(const QString &locale, InputMode inputMode) = 0;
-    virtual bool setTextCase(TextCase textCase) = 0;
+    explicit QVirtualKeyboardAbstractInputMethod(QObject *parent = nullptr);
+    ~QVirtualKeyboardAbstractInputMethod();
 
-    // キーイベント
+    QVirtualKeyboardInputContext *inputContext() const;
+    QVirtualKeyboardInputEngine *inputEngine() const;
+
+    // 入力モード（純粋仮想関数 - 必須実装）
+    virtual QList<QVirtualKeyboardInputEngine::InputMode> inputModes(const QString &locale) = 0;
+    virtual bool setInputMode(const QString &locale, QVirtualKeyboardInputEngine::InputMode inputMode) = 0;
+    virtual bool setTextCase(QVirtualKeyboardInputEngine::TextCase textCase) = 0;
+
+    // キーイベント（純粋仮想関数 - 必須実装）
     virtual bool keyEvent(Qt::Key key, const QString &text, Qt::KeyboardModifiers modifiers) = 0;
 
-    // 候補リスト
-    virtual QList<SelectionListModel::Type> selectionLists();
-    virtual int selectionListItemCount(SelectionListModel::Type type);
-    virtual QVariant selectionListData(SelectionListModel::Type type, int index, SelectionListModel::Role role);
-    virtual void selectionListItemSelected(SelectionListModel::Type type, int index);
+    // 候補リスト（デフォルト実装あり）
+    virtual QList<QVirtualKeyboardSelectionListModel::Type> selectionLists();
+    virtual int selectionListItemCount(QVirtualKeyboardSelectionListModel::Type type);
+    virtual QVariant selectionListData(QVirtualKeyboardSelectionListModel::Type type, int index, QVirtualKeyboardSelectionListModel::Role role);
+    virtual void selectionListItemSelected(QVirtualKeyboardSelectionListModel::Type type, int index);
+    virtual bool selectionListRemoveItem(QVirtualKeyboardSelectionListModel::Type type, int index);
 
-    // 手書き認識
-    virtual QList<PatternRecognitionMode> patternRecognitionModes() const;
-    virtual QVirtualKeyboardTrace *traceBegin(int traceId, PatternRecognitionMode patternRecognitionMode,
-                                              const QVariantMap &traceCaptureDeviceInfo,
-                                              const QVariantMap &traceScreenInfo);
+    // 手書き認識（デフォルト実装あり）
+    virtual QList<QVirtualKeyboardInputEngine::PatternRecognitionMode> patternRecognitionModes() const;
+    virtual QVirtualKeyboardTrace *traceBegin(
+            int traceId, QVirtualKeyboardInputEngine::PatternRecognitionMode patternRecognitionMode,
+            const QVariantMap &traceCaptureDeviceInfo, const QVariantMap &traceScreenInfo);
     virtual bool traceEnd(QVirtualKeyboardTrace *trace);
 
-public slots:
+    // 再選択機能（デフォルト実装あり）
+    virtual bool reselect(int cursorPosition, const QVirtualKeyboardInputEngine::ReselectFlags &reselectFlags);
+    virtual bool clickPreeditText(int cursorPosition);
+
+Q_SIGNALS:
+    void selectionListChanged(QVirtualKeyboardSelectionListModel::Type type);
+    void selectionListActiveItemChanged(QVirtualKeyboardSelectionListModel::Type type, int index);
+    void selectionListsChanged();
+
+public Q_SLOTS:
     virtual void reset();
     virtual void update();
 
-signals:
-    void selectionListChanged(SelectionListModel::Type type);
-    void selectionListActiveItemChanged(SelectionListModel::Type type, int index);
+private:
+    void setInputEngine(QVirtualKeyboardInputEngine *inputEngine);
 
-protected:
-    QVirtualKeyboardInputContext *inputContext() const;
+    friend class QVirtualKeyboardInputEngine;
 };
 ```
+
+#### メソッド詳細
+
+##### selectionLists()
+
+```cpp
+virtual QList<QVirtualKeyboardSelectionListModel::Type> selectionLists();
+```
+
+**用途**: この入力メソッドが提供する選択リストのタイプを返す
+
+**デフォルト実装**: 空のリストを返す
+
+**戻り値**: 選択リストタイプのリスト
+
+##### selectionListRemoveItem()
+
+```cpp
+virtual bool selectionListRemoveItem(QVirtualKeyboardSelectionListModel::Type type, int index);
+```
+
+**用途**: 選択リストから指定されたアイテムを削除（例: ユーザー辞書から単語削除）
+
+**パラメータ**:
+- `type`: 選択リストタイプ
+- `index`: 削除するアイテムのインデックス
+
+**戻り値**: 削除成功時true
+
+**デフォルト実装**: falseを返す（削除非対応）
+
+##### reselect()
+
+```cpp
+virtual bool reselect(int cursorPosition, const QVirtualKeyboardInputEngine::ReselectFlags &reselectFlags);
+```
+
+**用途**: カーソル位置の単語を再選択（編集モードに戻す）
+
+**パラメータ**:
+- `cursorPosition`: カーソル位置
+- `reselectFlags`:
+  - `WordBeforeCursor`: カーソル前の単語
+  - `WordAfterCursor`: カーソル後の単語
+  - `WordAtCursor`: カーソル位置の単語全体
+
+**戻り値**: 再選択成功時true
+
+**デフォルト実装**: falseを返す（再選択非対応）
+
+##### clickPreeditText()
+
+```cpp
+virtual bool clickPreeditText(int cursorPosition);
+```
+
+**用途**: preeditText内の指定位置がクリックされた時の処理
+
+**パラメータ**:
+- `cursorPosition`: preeditText内のカーソル位置
+
+**戻り値**: クリック処理成功時true
+
+**デフォルト実装**: falseを返す（クリック非対応）
+
+#### シグナル詳細
+
+##### selectionListsChanged()
+
+```cpp
+void selectionListsChanged();
+```
+
+**用途**: `selectionLists()`の戻り値が変更された時に発信
+
+**使用例**: 手書きモードとキーボードモードで異なる選択リストを提供する場合
 
 #### PlainInputMethod (デフォルト実装)
 
