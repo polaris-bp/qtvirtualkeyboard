@@ -14,7 +14,8 @@ docs/
 │   ├── QVK_5.12_COMPONENT_SPECIFICATIONS.md
 │   ├── QVK_5.12_DATA_FLOW_SEQUENCE.md
 │   ├── QVK_5.12_STYLING_GUIDE.md
-│   └── QVK_5.12_LAYOUT_GUIDE.md
+│   ├── QVK_5.12_LAYOUT_GUIDE.md
+│   └── QVK_5.12_HARDWARE_KEYBOARD_HANDLING.md
 └── custom/                      # カスタムオーバーレイキーボードの改造仕様書
     ├── DESIGN_CUSTOM_KEYBOARD_OVERLAY_5.12.md
     └── IMPLEMENTATION_SPEC_CUSTOM_OVERLAY_KEYBOARD.md
@@ -141,6 +142,42 @@ Qt Virtual Keyboard 5.12.10の実際のソースコードを精査してドキ�
 
 ---
 
+### 📖 [QVK_5.12_HARDWARE_KEYBOARD_HANDLING.md](original/QVK_5.12_HARDWARE_KEYBOARD_HANDLING.md)
+
+**概要**: ハードウェアキーボード処理仕様
+
+**内容**:
+- ハードウェアキーボードとの共存
+- イベント処理フロー:
+  - PlatformInputContext::eventFilter()
+  - QVirtualKeyboardInputContextPrivate::filterEvent()
+- キーイベントフィルタリング:
+  - activeKeys管理（QSet<quint32>）
+  - State列挙型とStateFlags
+  - 予測変換テキストの自動確定
+- 矢印キーナビゲーション:
+  - QT_VIRTUALKEYBOARD_ARROW_KEY_NAVIGATION
+  - navigationKeyPressed/Releasedシグナル
+  - activeNavigationKeys（QSet<int>）
+- 制約事項:
+  - 仮想キーボードの予測変換との共存不可
+  - 入力メソッドは物理キーに適用されない
+- 実装詳細:
+  - QVirtualKeyboardScopedState（RAII）
+  - sendKeyEvent()の無限ループ防止
+  - nativeScanCode()の扱い
+- 実践例とデバッグ
+
+**対象読者**: 開発者、システムインテグレーター
+
+**ページ数**: 約560行
+
+**特徴**:
+- ソースコード分析に基づく正確な仕様
+- 物理キーボードと仮想キーボードの併用シナリオを網羅
+
+---
+
 ## 🔧 custom/ - カスタムオーバーレイキーボード改造仕様書
 
 要件「①キーボード立ち上がり時キーボードで画面全体を覆う、②キーボードの上半分はキーボードに内包された入力フィールドとなる、③入力を確定後、エンターによって入力内容が覆う前の入力フィールドに反映される」を実装するための改造仕様書です。
@@ -238,12 +275,13 @@ Qt Virtual Keyboard 5.12.10の実際のソースコードを読み込み、以�
 
 ### 2. ドキュメント化
 
-ソースコードの実際の実装を基に、5つの包括的なドキュメントを作成：
+ソースコードの実際の実装を基に、6つの包括的なドキュメントを作成：
 1. Architecture Overview
 2. Component Specifications
 3. Data Flow & Sequence
 4. Styling Guide
 5. Layout Guide
+6. Hardware Keyboard Handling
 
 ### 3. 改造仕様書作成
 
@@ -273,6 +311,7 @@ Qt Virtual Keyboard 5.12.10の実際のソースコードを読み込み、以�
 
 - **スタイル変更**: `original/QVK_5.12_STYLING_GUIDE.md`
 - **レイアウト変更**: `original/QVK_5.12_LAYOUT_GUIDE.md`
+- **ハードウェアキーボード併用**: `original/QVK_5.12_HARDWARE_KEYBOARD_HANDLING.md`
 - **オーバーレイキーボード実装**: `custom/IMPLEMENTATION_SPEC_CUSTOM_OVERLAY_KEYBOARD.md`
 
 ---
@@ -285,6 +324,7 @@ Qt Virtual Keyboard 5.12.10の実際のソースコードを読み込み、以�
 | 2026-01-10 | Component Specifications精査・改善 | Claude |
 | 2026-01-10 | カスタムオーバーレイキーボード改造仕様書作成 | Claude |
 | 2026-01-10 | ドキュメント階層化 (original/ と custom/) | Claude |
+| 2026-01-11 | Hardware Keyboard Handling追加 | Claude |
 
 ---
 
