@@ -1,51 +1,53 @@
-# Qt 5.12 / 5.13 フォント管理 詳細リファレンス
+# Qt 5.12 / 5.13 フォント管理ガイド
 
-本ドキュメントはQt 5.12およびQt 5.13におけるフォント管理の仕様を詳細に解説します。特にフォールバック設定について重点的に説明します。
+本ドキュメントは、Qt 5.12およびQt 5.13でのフォント管理に関する包括的なガイドです。Qt 6への移行情報も含みます。
+
+> **注意**: 入門編・スタンダード編・応用編（01〜03）は **Qt 6（主に6.5以降）** を対象として記述されています。Qt 5.12/5.13を使用する場合は、本ドキュメントを参照してください。
 
 ## 目次
 
-1. [概要](#概要)
-2. [Qt 5.12 フォント仕様](#qt-512-フォント仕様)
-3. [Qt 5.13 フォント仕様](#qt-513-フォント仕様)
+1. [バージョン別機能比較](#バージョン別機能比較)
+2. [Qt 5.12 の仕様](#qt-512-の仕様)
+3. [Qt 5.13 の仕様](#qt-513-の仕様)
 4. [フォントマッチングアルゴリズム](#フォントマッチングアルゴリズム)
-5. [フォールバック設定の詳細](#フォールバック設定の詳細)
+5. [フォールバック設定の全手法](#フォールバック設定の全手法)
 6. [グリフフォールバック（Font Merging）](#グリフフォールバックfont-merging)
-7. [フォント置換（Font Substitution）](#フォント置換font-substitution)
-8. [プラットフォーム別の動作](#プラットフォーム別の動作)
-9. [実装パターン集](#実装パターン集)
+7. [実装例：Qt 5.12](#実装例qt-512)
+8. [実装例：Qt 5.13](#実装例qt-513)
+9. [Qt 6への移行ガイド](#qt-6への移行ガイド)
 10. [制限事項と注意点](#制限事項と注意点)
 
 ---
 
-## 概要
+## バージョン別機能比較
 
-### バージョン別機能比較
+### Qt 5.12 vs Qt 5.13 vs Qt 6
 
-| 機能 | Qt 5.12 | Qt 5.13 |
-|------|:-------:|:-------:|
-| `QFont::setFamily()` | ✅ | ✅ |
-| `QFont::setFamilies()` | ❌ | ✅ |
-| `QFont::families()` | ❌ | ✅ |
-| `QFont::setStyleHint()` | ✅ | ✅ |
-| `QFont::setStyleStrategy()` | ✅ | ✅ |
-| `QFontDatabase::addApplicationFont()` | ✅ | ✅ |
-| Font Merging（グリフフォールバック） | ✅ | ✅ |
-| Font Substitution | ✅ | ✅ |
-| FontLoader (QML) | ✅ | ✅ |
+| 機能 | Qt 5.12 | Qt 5.13 | Qt 6.0 | Qt 6.5 |
+|------|:-------:|:-------:|:------:|:------:|
+| `QFont::setFamily()` | ✅ | ✅ | ✅ | ✅ |
+| `QFont::setFamilies()` | ❌ | ✅ | ✅ | ✅ |
+| `QFont::families()` | ❌ | ✅ | ✅ | ✅ |
+| `FontLoader.name` | ✅ (読み書き) | ✅ (読み書き) | ✅ (読み取り専用) | ✅ (読み取り専用) |
+| `FontLoader.font` | ❌ | ❌ | ✅ | ✅ |
+| `QFontDatabase` インスタンスメソッド | ✅ | ✅ | ⚠️ 非推奨 | ⚠️ 非推奨 |
+| `QFontDatabase` 静的メソッド | ❌ | ❌ | ✅ | ✅ |
+| `setApplicationFallbackFontFamilies()` | ❌ | ❌ | ❌ | ✅ |
+| Font Merging | ✅ | ✅ | ✅ | ✅ |
+| Font Substitution | ✅ | ✅ | ✅ | ✅ |
 
-### QML FontLoaderの仕様（共通）
+### フォールバック制御の比較
 
-| プロパティ | 型 | 説明 |
-|-----------|-----|------|
-| `source` | url | フォントファイルのURL |
-| `status` | enumeration | Null, Loading, Ready, Error |
-| `name` | string | フォントファミリー名（**読み書き可能**） |
-
-**注意**: Qt 5.xでは`name`プロパティは読み書き可能です。Qt 6.xでは読み取り専用に変更されました。
+| 項目 | Qt 5.12 | Qt 5.13 | Qt 6.5 |
+|------|---------|---------|--------|
+| **フォールバック指定** | 手動制御 | `setFamilies()` | `setApplicationFallbackFontFamilies()` |
+| **適用範囲** | フォントごと | フォントごと | **アプリ全体** |
+| **スクリプト別設定** | ❌ | ❌ | ✅ |
+| **実装の複雑さ** | 高 | 中 | 低 |
 
 ---
 
-## Qt 5.12 フォント仕様
+## Qt 5.12 の仕様
 
 ### 主要API
 
@@ -86,12 +88,8 @@ void QFont::setStyleHint(StyleHint hint, StyleStrategy strategy = PreferDefault)
 | `Helvetica` / `SansSerif` | サンセリフ体 | Arial, Helvetica |
 | `Times` / `Serif` | セリフ体 | Times New Roman |
 | `Courier` / `TypeWriter` | 等幅フォント | Courier New |
-| `OldEnglish` / `Decorative` | 装飾フォント | - |
-| `System` | システムフォント | OS依存 |
-| `AnyStyle` | 任意 | - |
-| `Cursive` | 筆記体 | Comic Sans MS |
 | `Monospace` | 等幅 | Consolas, Monaco |
-| `Fantasy` | ファンタジー | - |
+| `System` | システムフォント | OS依存 |
 
 ```cpp
 QFont font("MyCustomFont");
@@ -106,20 +104,13 @@ font.setStyleHint(QFont::SansSerif);  // 見つからない場合サンセリフ
 void QFont::setStyleStrategy(StyleStrategy s)
 ```
 
-**StyleStrategy 列挙値:**
+**主要なStyleStrategy:**
 
 | 値 | 説明 |
 |-----|------|
 | `PreferDefault` | デフォルト動作 |
-| `PreferBitmap` | ビットマップフォント優先 |
-| `PreferDevice` | デバイスフォント優先 |
 | `PreferOutline` | アウトラインフォント優先 |
-| `ForceOutline` | アウトラインを強制 |
-| `PreferMatch` | 正確なサイズを優先 |
 | `PreferQuality` | 品質を優先 |
-| `PreferAntialias` | アンチエイリアス優先 |
-| `NoAntialias` | アンチエイリアス無効 |
-| `NoSubpixelAntialias` | サブピクセルAA無効 |
 | `NoFontMerging` | **グリフフォールバック無効** |
 
 ```cpp
@@ -128,49 +119,36 @@ QFont font("MyFont");
 font.setStyleStrategy(QFont::NoFontMerging);
 ```
 
-### Qt 5.12でのフォールバック実装パターン
+### FontLoader (QML)
 
-```cpp
-// パターン1: styleHintを使用
-QFont createFontWithHint(const QString &family, int pixelSize)
-{
-    QFont font(family);
-    font.setPixelSize(pixelSize);
-    font.setStyleHint(QFont::SansSerif);  // フォールバックヒント
-    return font;
-}
+Qt 5.12/5.13のFontLoaderプロパティ：
 
-// パターン2: 手動でフォント存在確認
-QFont createFontWithManualFallback(const QStringList &families, int pixelSize)
-{
-    QFontDatabase db;
-    QStringList availableFamilies = db.families();
+| プロパティ | 型 | 説明 |
+|-----------|-----|------|
+| `source` | url | フォントファイルのURL |
+| `status` | enumeration | Null, Loading, Ready, Error |
+| `name` | string | フォントファミリー名（**読み書き可能**） |
 
-    for (const QString &family : families) {
-        if (availableFamilies.contains(family, Qt::CaseInsensitive)) {
-            QFont font(family);
-            font.setPixelSize(pixelSize);
-            return font;
-        }
+```qml
+import QtQuick 2.12
+
+Item {
+    FontLoader {
+        id: customFont
+        source: "fonts/MyFont.ttf"
     }
 
-    // 全て見つからない場合
-    QFont font;
-    font.setStyleHint(QFont::SansSerif);
-    font.setPixelSize(pixelSize);
-    return font;
+    Text {
+        text: "サンプル"
+        // Qt 5では name プロパティを使用
+        font.family: customFont.name
+    }
 }
-
-// 使用例
-QFont font = createFontWithManualFallback(
-    {"Noto Sans JP", "Yu Gothic", "MS Gothic", "Arial"},
-    16
-);
 ```
 
 ---
 
-## Qt 5.13 フォント仕様
+## Qt 5.13 の仕様
 
 ### 新規追加API
 
@@ -194,7 +172,7 @@ font.setPixelSize(16);
 1. "Noto Sans JP" を検索 → 見つかれば使用、終了
 2. 見つからなければ "Yu Gothic" を検索 → 見つかれば使用、終了
 3. 見つからなければ "Arial" を検索 → 見つかれば使用、終了
-4. 見つからなければ "sans-serif" を検索 → システムのサンセリフフォントを使用
+4. 見つからなければ "sans-serif" → システムのサンセリフフォントを使用
 5. 全て見つからなければ → システムデフォルトフォント
 
 #### QFont::families()
@@ -213,79 +191,6 @@ font.setFamilies({"Noto Sans JP", "Arial"});
 
 QStringList families = font.families();
 // families = ["Noto Sans JP", "Arial"]
-```
-
-### ファウンドリ名の指定
-
-フォントファミリー名にファウンドリ（製造元）を含めることができます。
-
-```cpp
-font.setFamilies({
-    "Helvetica [Adobe]",      // Adobeのhelveticaを優先
-    "Helvetica [Cronyx]",     // なければCronyxのHelvetica
-    "Arial"                   // なければArial
-});
-```
-
-### Qt 5.13でのフォールバック実装パターン
-
-```cpp
-// パターン1: 基本的なフォールバックチェーン
-QFont createFontWithFallback(int pixelSize)
-{
-    QFont font;
-    font.setFamilies({
-        "Noto Sans JP",    // 第1優先
-        "Yu Gothic",       // 第2優先
-        "Hiragino Sans",   // 第3優先（macOS）
-        "MS Gothic",       // 第4優先（Windows）
-        "Arial",           // 第5優先
-        "sans-serif"       // 最終フォールバック
-    });
-    font.setPixelSize(pixelSize);
-    return font;
-}
-
-// パターン2: 用途別フォールバック
-class FontFactory
-{
-public:
-    static QFont uiFont(int pixelSize)
-    {
-        QFont font;
-        font.setFamilies({"Segoe UI", "San Francisco", "Noto Sans", "Arial"});
-        font.setPixelSize(pixelSize);
-        return font;
-    }
-
-    static QFont japaneseFont(int pixelSize)
-    {
-        QFont font;
-        font.setFamilies({
-            "Noto Sans JP",
-            "Yu Gothic UI",
-            "Hiragino Sans",
-            "Meiryo",
-            "MS Gothic"
-        });
-        font.setPixelSize(pixelSize);
-        return font;
-    }
-
-    static QFont codeFont(int pixelSize)
-    {
-        QFont font;
-        font.setFamilies({
-            "Fira Code",
-            "Source Code Pro",
-            "Consolas",
-            "Monaco",
-            "monospace"
-        });
-        font.setPixelSize(pixelSize);
-        return font;
-    }
-};
 ```
 
 ---
@@ -361,16 +266,17 @@ qDebug() << "要求:" << requested.family();
 qDebug() << "実際:" << actual.family();
 qDebug() << "完全一致:" << actual.exactMatch();
 qDebug() << "スタイル:" << actual.styleName();
-qDebug() << "ピクセルサイズ:" << actual.pixelSize();
 ```
 
 ---
 
-## フォールバック設定の詳細
+## フォールバック設定の全手法
+
+Qt 5.12/5.13では、以下の5つの方法でフォールバックを設定できます。
 
 ### 方法1: styleHintによるカテゴリベースのフォールバック
 
-最も基本的なフォールバック設定方法です。
+最も基本的な方法です。
 
 ```cpp
 QFont font("NonExistentFont");
@@ -398,11 +304,17 @@ font.setFamilies({"PrimaryFont", "Fallback1", "Fallback2", "sans-serif"});
 アプリケーション全体でフォント置換ルールを設定できます。
 
 ```cpp
-// "Comic Sans MS" を要求されたら "Arial" を使用
+// 単一置換
 QFont::insertSubstitution("Comic Sans MS", "Arial");
 
-// 複数の置換を設定
-QFont::insertSubstitutions("MyFont", {"Arial", "Helvetica", "sans-serif"});
+// 複数置換（優先順位順）
+QFont::insertSubstitutions("MyBrandFont", {"Noto Sans", "Arial", "sans-serif"});
+
+// 取得
+QStringList substitutes = QFont::substitutes("MyBrandFont");
+
+// 削除
+QFont::removeSubstitutions("MyBrandFont");
 ```
 
 **利点**: 一度の設定でアプリ全体に適用
@@ -419,21 +331,18 @@ QString resolveFontFamily(const QStringList &candidates)
     QStringList available = db.families();
 
     for (const QString &candidate : candidates) {
-        // 完全一致
         if (available.contains(candidate, Qt::CaseInsensitive)) {
             return candidate;
         }
-
-        // 部分一致（"Noto Sans" で "Noto Sans JP" を見つける）
-        for (const QString &avail : available) {
-            if (avail.startsWith(candidate, Qt::CaseInsensitive)) {
-                return avail;
-            }
-        }
     }
 
-    return QString();  // 見つからない
+    return "sans-serif";  // 見つからない場合
 }
+
+// 使用例
+QString family = resolveFontFamily({
+    "Noto Sans JP", "Yu Gothic", "MS Gothic", "Arial"
+});
 ```
 
 ### 方法5: QML FontLoaderによる確実なフォールバック
@@ -441,7 +350,6 @@ QString resolveFontFamily(const QStringList &candidates)
 QMLでは`FontLoader`のステータスを確認してフォールバックを実装します。
 
 ```qml
-// Qt 5.12 / 5.13 共通
 import QtQuick 2.12
 
 Item {
@@ -508,116 +416,147 @@ qDebug() << "A:" << hasGlyph(font, 'A');        // true
 qDebug() << "あ:" << hasGlyph(font, u'あ');     // false（通常）
 ```
 
-### 文字列全体のグリフ確認
+---
 
-```cpp
-QStringList getMissingGlyphs(const QFont &font, const QString &text)
-{
-    QFontMetrics metrics(font);
-    QStringList missing;
+## 実装例：Qt 5.12
 
-    for (const QChar &ch : text) {
-        if (!ch.isSpace() && !metrics.inFont(ch)) {
-            missing << QString("%1 (U+%2)")
-                .arg(ch)
-                .arg(ch.unicode(), 4, 16, QChar('0'));
-        }
+### QML: FontLoaderのステータスによる手動制御
+
+```qml
+// Qt512FontFallback.qml
+import QtQuick 2.12
+import QtQuick.Window 2.12
+
+Window {
+    id: root
+    width: 600
+    height: 400
+    visible: true
+    title: "Qt 5.12 Font Fallback Example"
+
+    // プライマリフォント
+    FontLoader {
+        id: primaryFont
+        source: "qrc:/fonts/CustomFont.ttf"
     }
 
-    return missing;
+    // フォールバックフォント1
+    FontLoader {
+        id: fallbackFont1
+        source: "qrc:/fonts/NotoSansJP-Regular.ttf"
+    }
+
+    // フォールバックフォント2
+    FontLoader {
+        id: fallbackFont2
+        source: "qrc:/fonts/Arial.ttf"
+    }
+
+    // フォールバックロジック
+    QtObject {
+        id: fontManager
+
+        readonly property string resolvedFamily: {
+            if (primaryFont.status === FontLoader.Ready) {
+                return primaryFont.name
+            }
+            if (fallbackFont1.status === FontLoader.Ready) {
+                console.log("Primary font failed, using fallback 1")
+                return fallbackFont1.name
+            }
+            if (fallbackFont2.status === FontLoader.Ready) {
+                console.log("Fallback 1 failed, using fallback 2")
+                return fallbackFont2.name
+            }
+            console.log("All custom fonts failed, using system font")
+            return "sans-serif"
+        }
+
+        readonly property bool isReady:
+            primaryFont.status !== FontLoader.Loading &&
+            fallbackFont1.status !== FontLoader.Loading &&
+            fallbackFont2.status !== FontLoader.Loading
+    }
+
+    Column {
+        anchors.centerIn: parent
+        spacing: 20
+        visible: fontManager.isReady
+
+        Text {
+            text: "Qt 5.12 フォールバック制御"
+            font.family: fontManager.resolvedFamily
+            font.pixelSize: 24
+        }
+
+        Text {
+            text: "使用中のフォント: " + fontManager.resolvedFamily
+            font.pixelSize: 14
+            color: "gray"
+        }
+    }
 }
 ```
 
----
-
-## フォント置換（Font Substitution）
-
-### 置換の設定
+### C++: 手動フォールバック + styleHint
 
 ```cpp
-// 単一置換
-QFont::insertSubstitution("Helvetica", "Arial");
+// qt512_font_fallback.cpp
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QFontDatabase>
+#include <QFont>
+#include <QDebug>
 
-// 複数置換（優先順位順）
-QFont::insertSubstitutions("MyBrandFont", {
-    "Noto Sans",
-    "Arial",
-    "sans-serif"
-});
+class FontManager512 : public QObject
+{
+    Q_OBJECT
+    Q_PROPERTY(QString primaryFamily READ primaryFamily NOTIFY fontsChanged)
+
+public:
+    explicit FontManager512(QObject *parent = nullptr) : QObject(parent) {}
+
+    void loadFonts()
+    {
+        int id = QFontDatabase::addApplicationFont(":/fonts/CustomFont.ttf");
+        if (id != -1) {
+            QFontDatabase db;
+            m_primaryFamily = db.applicationFontFamilies(id).value(0, "");
+        }
+        emit fontsChanged();
+    }
+
+    QString primaryFamily() const { return m_primaryFamily; }
+
+    // Qt 5.12でのフォールバック付きQFont作成
+    Q_INVOKABLE QFont createFontWithFallback(const QString &primary,
+                                              int pixelSize) const
+    {
+        QFont font;
+
+        // カンマ区切りでフォールバックを指定
+        QString familyChain = primary + ", Arial, sans-serif";
+        font.setFamily(familyChain);
+        font.setPixelSize(pixelSize);
+
+        // styleHintも設定
+        font.setStyleHint(QFont::SansSerif);
+
+        return font;
+    }
+
+signals:
+    void fontsChanged();
+
+private:
+    QString m_primaryFamily = "sans-serif";
+};
 ```
 
-### 置換の取得
+### 多言語対応フォントマネージャー（Qt 5.12）
 
 ```cpp
-// 単一の置換先を取得
-QString substitute = QFont::substitute("Helvetica");
-// → "Arial"（設定されている場合）
-
-// 全ての置換先を取得
-QStringList substitutes = QFont::substitutes("MyBrandFont");
-// → ["Noto Sans", "Arial", "sans-serif"]
-
-// 全置換ルールの対象フォントを取得
-QStringList families = QFont::substitutions();
-```
-
-### 置換の削除
-
-```cpp
-// 特定の置換を削除
-QFont::removeSubstitutions("MyBrandFont");
-```
-
-### 注意事項
-
-- 置換はアプリケーション全体に影響する
-- 置換はフォントマッチングの**前**に評価される
-- 大文字小文字を区別しない
-
----
-
-## プラットフォーム別の動作
-
-### Windows (DirectWrite)
-
-```cpp
-// Windows固有の考慮事項
-#ifdef Q_OS_WIN
-// ClearTypeレンダリングがデフォルト
-// システムフォールバック: Segoe UI, MS Gothic, SimSun など
-
-// 高DPI環境での注意
-// AA_EnableHighDpiScaling の設定確認
-#endif
-```
-
-### macOS (Core Text)
-
-```cpp
-#ifdef Q_OS_MACOS
-// システムフォールバック: San Francisco, Hiragino など
-// Retinaディスプレイに自動最適化
-#endif
-```
-
-### Linux (Fontconfig + FreeType)
-
-```cpp
-#ifdef Q_OS_LINUX
-// fontconfig設定が優先される場合がある
-// 環境変数: QT_QPA_FONTDIR でフォントディレクトリ指定可能
-// デバッグ: QT_LOGGING_RULES="qt.qpa.fonts=true"
-#endif
-```
-
----
-
-## 実装パターン集
-
-### パターン1: 多言語対応フォントマネージャー（Qt 5.12）
-
-```cpp
-class FontManager512
+class FontManager512MultiLang
 {
 public:
     static QFont forLanguage(const QString &lang, int pixelSize)
@@ -664,44 +603,124 @@ private:
 };
 ```
 
-### パターン2: 多言語対応フォントマネージャー（Qt 5.13）
+---
+
+## 実装例：Qt 5.13
+
+### C++: QFont::setFamilies()の使用
 
 ```cpp
-class FontManager513
+// qt513_font_fallback.cpp
+#include <QGuiApplication>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
+#include <QFontDatabase>
+#include <QFont>
+#include <QDebug>
+
+class FontManager513 : public QObject
 {
+    Q_OBJECT
+    Q_PROPERTY(QStringList fallbackChain READ fallbackChain NOTIFY fontsChanged)
+
 public:
-    static QFont forLanguage(const QString &lang, int pixelSize)
+    explicit FontManager513(QObject *parent = nullptr) : QObject(parent) {}
+
+    void loadFonts()
+    {
+        // フォントをロード
+        loadFont(":/fonts/CustomFont.ttf");
+        loadFont(":/fonts/NotoSansJP-Regular.ttf");
+
+        // システムフォントをフォールバックに追加
+        m_fallbackChain.append("Arial");
+        m_fallbackChain.append("sans-serif");
+
+        qDebug() << "Fallback chain:" << m_fallbackChain;
+        emit fontsChanged();
+    }
+
+    QStringList fallbackChain() const { return m_fallbackChain; }
+
+    // Qt 5.13のsetFamilies()を使用したQFont作成
+    Q_INVOKABLE QFont createFont(int pixelSize) const
     {
         QFont font;
+
+        // Qt 5.13の新機能: setFamilies()
+        font.setFamilies(m_fallbackChain);
         font.setPixelSize(pixelSize);
 
-        if (lang == "ja") {
-            font.setFamilies({
-                "Noto Sans JP", "Yu Gothic", "Hiragino Sans",
-                "Meiryo", "MS Gothic", "sans-serif"
-            });
-        } else if (lang == "zh-CN") {
-            font.setFamilies({
-                "Noto Sans SC", "Microsoft YaHei", "SimHei",
-                "SimSun", "sans-serif"
-            });
-        } else if (lang == "ko") {
-            font.setFamilies({
-                "Noto Sans KR", "Malgun Gothic", "Gulim", "sans-serif"
-            });
-        } else {
-            font.setFamilies({
-                "Noto Sans", "Segoe UI", "San Francisco",
-                "Arial", "sans-serif"
-            });
-        }
+        return font;
+    }
 
+signals:
+    void fontsChanged();
+
+private:
+    void loadFont(const QString &path)
+    {
+        int id = QFontDatabase::addApplicationFont(path);
+        if (id != -1) {
+            QFontDatabase db;
+            QStringList families = db.applicationFontFamilies(id);
+            for (const QString &family : families) {
+                if (!m_fallbackChain.contains(family)) {
+                    m_fallbackChain.append(family);
+                }
+            }
+        }
+    }
+
+    QStringList m_fallbackChain;
+};
+```
+
+### 用途別フォールバック（Qt 5.13）
+
+```cpp
+class FontFactory513
+{
+public:
+    static QFont uiFont(int pixelSize)
+    {
+        QFont font;
+        font.setFamilies({"Segoe UI", "San Francisco", "Noto Sans", "Arial"});
+        font.setPixelSize(pixelSize);
+        return font;
+    }
+
+    static QFont japaneseFont(int pixelSize)
+    {
+        QFont font;
+        font.setFamilies({
+            "Noto Sans JP",
+            "Yu Gothic UI",
+            "Hiragino Sans",
+            "Meiryo",
+            "MS Gothic"
+        });
+        font.setPixelSize(pixelSize);
+        return font;
+    }
+
+    static QFont codeFont(int pixelSize)
+    {
+        QFont font;
+        font.setFamilies({
+            "Fira Code",
+            "Source Code Pro",
+            "Consolas",
+            "Monaco",
+            "monospace"
+        });
+        font.setPixelSize(pixelSize);
         return font;
     }
 };
 ```
 
-### パターン3: QMLシングルトン（Qt 5.12/5.13共通）
+### QMLシングルトン（Qt 5.12/5.13共通）
 
 ```qml
 // FontConfig.qml
@@ -735,6 +754,105 @@ QtObject {
         }
     }
 }
+```
+
+---
+
+## Qt 6への移行ガイド
+
+### FontLoaderの変更
+
+| 項目 | Qt 5.x | Qt 6.x |
+|------|--------|--------|
+| `name` | 読み書き可能 | **読み取り専用** |
+| `font` | ❌ 存在しない | ✅ 追加（推奨） |
+
+#### Qt 5/6 両対応コード
+
+```qml
+FontLoader {
+    id: customFont
+    source: "qrc:/fonts/MyFont.ttf"
+}
+
+Text {
+    text: "互換性のあるコード"
+
+    font.family: {
+        // Qt 6 では font.family を使用、Qt 5 では name を使用
+        if (typeof customFont.font !== 'undefined') {
+            return customFont.font.family  // Qt 6
+        } else {
+            return customFont.name  // Qt 5
+        }
+    }
+}
+```
+
+### QFontDatabaseの変更
+
+#### Qt 5.x
+
+```cpp
+// インスタンスを作成してメソッドを呼び出す
+QFontDatabase database;
+const QStringList families = database.families();
+```
+
+#### Qt 6.x
+
+```cpp
+// 静的メソッドを直接呼び出す（インスタンス不要）
+const QStringList families = QFontDatabase::families();
+```
+
+#### 互換コード
+
+```cpp
+QStringList getFontFamilies()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+    return QFontDatabase::families();
+#else
+    QFontDatabase database;
+    return database.families();
+#endif
+}
+```
+
+### QFont::Weight の変更
+
+Qt 6ではOpenType weight値に合わせて数値が変更されました。
+
+| Weight | Qt 5.x 値 | Qt 6.x 値 |
+|--------|----------|------------|
+| Thin | 0 | 100 |
+| Light | 25 | 300 |
+| Normal | 50 | 400 |
+| Bold | 75 | 700 |
+| Black | 87 | 900 |
+
+```cpp
+// Qt 5.x - 整数値で指定可能
+font.setWeight(75);  // Bold
+
+// Qt 6.x - 列挙値を使用
+font.setWeight(QFont::Bold);
+
+// Qt 6.x - 旧整数値を使いたい場合
+font.setLegacyWeight(75);  // Qt 5互換
+```
+
+### import文の変更
+
+```qml
+// Qt 5.x
+import QtQuick 2.12
+import QtQuick.Window 2.12
+
+// Qt 6.x
+import QtQuick
+import QtQuick.Window
 ```
 
 ---
@@ -773,10 +891,54 @@ QtObject {
 
 ---
 
+## CMakeLists.txt テンプレート
+
+### Qt 5.12/5.13用
+
+```cmake
+cmake_minimum_required(VERSION 3.5)
+project(FontFallbackExample VERSION 1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTORCC ON)
+
+find_package(Qt5 REQUIRED COMPONENTS Quick Gui)
+
+add_executable(fontfallback
+    main.cpp
+    resources.qrc
+)
+
+target_link_libraries(fontfallback PRIVATE
+    Qt5::Quick
+    Qt5::Gui
+)
+```
+
+### resources.qrc（Qt 5用）
+
+```xml
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/fonts">
+        <file>fonts/CustomFont.ttf</file>
+        <file>fonts/NotoSansJP-Regular.ttf</file>
+    </qresource>
+    <qresource prefix="/">
+        <file>main.qml</file>
+    </qresource>
+</RCC>
+```
+
+---
+
 ## 参考リンク
 
 - [QFont Class | Qt 5.12](https://doc.qt.io/archives/qt-5.12/qfont.html)
 - [QFont Class | Qt 5.13](https://doc.qt.io/archives/qt-5.13/qfont.html)
 - [QFontDatabase Class | Qt 5.12](https://doc.qt.io/qt-5.12/qfontdatabase.html)
 - [FontLoader QML Type | Qt 5.12](https://doc.qt.io/archives/qt-5.12/qml-qtquick-fontloader.html)
+- [Changes to Qt GUI | Qt 6](https://doc.qt.io/qt-6/gui-changes-qt6.html)
 - [QTBUG-68829: FontLoader returns preferred family name](https://bugreports.qt.io/browse/QTBUG-68829)
