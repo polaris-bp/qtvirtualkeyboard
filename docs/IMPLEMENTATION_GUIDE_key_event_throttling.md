@@ -177,7 +177,7 @@ if (Settings::instance()->arrowKeyNavigationEnabled()) {
 - 変更箇所が最小限かつ局所的（filterEvent 内の数行のみ）
 - 初回押下の応答性を犠牲にしない（isAutoRepeat のみ対象）
 - Settings 経由で実行時に間隔を調整可能
-- 既存の Settings パターン（hwrTimeout 等）と完全に一貫
+- 既存の Settings パターン（`arrowKeyNavigationEnabled` 等）と一貫
 - テストが容易（キーリピートイベントをシミュレートするだけ）
 
 **デメリット:**
@@ -428,8 +428,8 @@ Qt にはキーリピートレートを制御する公式APIは存在しない�
 
 案A は filterEvent 内の isAutoRepeat 判定により初回押下の応答性を維持しつつ、
 Settings 経由で実行時に調整可能な間引き機構を提供する。
-変更量も少なく、既存の Settings パターン（`hwrTimeoutForAlphabetic` 等）と
-完全に一貫した設計である。
+変更量も少なく、同じ矢印キーナビゲーション領域の既存プロパティ
+`arrowKeyNavigationEnabled` と一貫した設計である。
 
 ---
 
