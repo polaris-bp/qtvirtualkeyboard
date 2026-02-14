@@ -1,37 +1,9 @@
 # 実装ガイド: 物理キーボード ナビゲーションキーイベント間引き処理
 
-## 1. 前回分析の訂正事項
+## 1. 現状のイベントフロー
 
-前回の分析では仮想キーボード（タッチ入力）側のイベントパスと物理キーボード側のイベントパスを混同していた箇所があった。以下に訂正を明記する。
-
-### 前回の案1「timerEvent のリピートレート制御」→ 誤り
-
-`QVirtualKeyboardInputEngine::timerEvent()` (`qvirtualkeyboardinputengine.cpp:683-694`) は
-**仮想キーボード上のキーを長押しした際のリピート処理専用**である。
-物理キーボードのキーリピートはOS側で生成され、`timerEvent` は一切関与しない。
-
-```
-仮想キーボード: タッチ長押し → virtualKeyPress(repeat=true) → startTimer(600) → timerEvent → virtualKeyClick
-物理キーボード: OSキーリピート → QKeyEvent(isAutoRepeat=true) → eventFilter → filterEvent
-```
-
-したがって、timerEvent のインターバル変更は**物理キーボードの問題には効果がない**。
-
-### 前回の案3「virtualKeyClick レベルのスロットリング」→ 誤り
-
-`virtualKeyClick()` (`qvirtualkeyboardinputengine.cpp:46-63`) は仮想キーボードの
-キーイベントルーティング専用のメソッドである。物理キーボードの矢印キーは
-`filterEvent()` で消費（return true）されるため、`virtualKeyClick` には到達しない。
-
-### 前回の案4「sendKeyClick でのスロットリング」→ 誤り
-
-`sendKeyClick()` (`qvirtualkeyboardinputcontext.cpp:195-224`) は `FallbackInputMethod` が
-仮想キーボードのキーイベントをアプリケーションに転送する際に呼ばれるメソッドであり、
-物理キーボードの矢印キーイベントはこのパスを通らない。
-
----
-
-## 2. 物理キーボードイベントの正確なフロー
+物理キーボードの矢印キーが押下されると、以下のパスで仮想キーボード上のナビゲーション
+カーソルが移動する。
 
 ```
 物理キーボード押下
@@ -81,7 +53,7 @@ navigationHighlight (Loader) が視覚的に追従              ← [Keyboard.qm
   Behavior on x/y: NumberAnimation { duration: 200ms }  ← [行636-647]
 ```
 
-### 重要な事実
+### 問題点
 
 1. **スロットリング機構は一切存在しない**: filterEvent は受け取った全てのキーイベントを
    そのまま `navigationKeyPressed` シグナルとして発火する
@@ -94,7 +66,7 @@ navigationHighlight (Loader) が視覚的に追従              ← [Keyboard.qm
 
 ---
 
-## 3. 実装案（おすすめ度順）
+## 2. 実装案
 
 ---
 
@@ -215,7 +187,7 @@ if (Settings::instance()->arrowKeyNavigationEnabled()) {
 
 ---
 
-### 案B（推奨）: QML onNavigationKeyPressed ハンドラでの Timer ベーススロットリング
+### 案B: QML onNavigationKeyPressed ハンドラでの Timer ベーススロットリング
 
 **変更対象ファイル:**
 - `src/components/Keyboard.qml` のみ
@@ -443,7 +415,7 @@ Qt にはキーリピートレートを制御する公式APIは存在しない�
 
 ---
 
-## 4. 推奨組み合わせ
+## 3. 選定ガイド
 
 | シナリオ | 推奨案 |
 |---|---|
@@ -461,7 +433,7 @@ Settings 経由で実行時に調整可能な間引き機構を提供する。
 
 ---
 
-## 5. テスト方針
+## 4. テスト方針
 
 ### 手動テスト
 
@@ -495,7 +467,7 @@ void tst_InputContext::navigationKeyThrottling()
 
 ---
 
-## 6. 設定値のチューニングガイド
+## 5. 設定値のチューニングガイド
 
 | 設定値 (ms) | 移動速度 (回/秒) | 体感 |
 |---|---|---|
