@@ -37,3 +37,7 @@ tst_*
 tst_*.exe
 
 .DS_Store
+
+# Hypothesis validation build artifacts
+tests/hypothesis_validation/throttle_test
+tests/hypothesis_validation/moc_predefs.h
