@@ -118,6 +118,15 @@ KeyboardStyle {
                     capitalization: control.uppercased ? Font.AllUppercase : Font.MixedCase
                 }
             }
+            Text {
+                id: keyFontInfo
+                text: keyText.fontInfo.family
+                color: "#80ffffff"
+                font.pixelSize: 16 * scaleHint
+                anchors.bottom: parent.bottom
+                anchors.left: parent.left
+                anchors.margins: keyContentMargin / 4
+            }
             states: [
                 State {
                     when: control.smallText === "\u2699" && control.smallTextVisible
