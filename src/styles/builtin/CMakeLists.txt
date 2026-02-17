@@ -10,6 +10,7 @@ qt_internal_add_qml_module(qtvkbbuiltinstylesplugin
     NO_PLUGIN_OPTIONAL
     NO_GENERATE_PLUGIN_SOURCE
     SOURCES
+        glyphfontinfo.cpp glyphfontinfo.h
         qtquickvirtualkeyboardbstylesbuiltinplugin.cpp qtquickvirtualkeyboardbstylesbuiltinplugin.h
     NO_GENERATE_CPP_EXPORTS
 )

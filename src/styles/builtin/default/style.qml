@@ -5,6 +5,7 @@ import QtQuick
 import QtQuick.Layouts
 import QtQuick.VirtualKeyboard
 import QtQuick.VirtualKeyboard.Styles
+import QtQuick.VirtualKeyboard.Styles.Builtin
 
 KeyboardStyle {
     id: currentStyle
@@ -118,14 +119,20 @@ KeyboardStyle {
                     capitalization: control.uppercased ? Font.AllUppercase : Font.MixedCase
                 }
             }
+            GlyphFontInfo {
+                id: glyphResolver
+            }
             Text {
                 id: keyFontInfo
-                text: keyText.fontInfo.family
+                text: glyphResolver.resolveSummary(control.displayText, keyText.font)
                 color: "#80ffffff"
                 font.pixelSize: 16 * scaleHint
                 anchors.bottom: parent.bottom
-                anchors.left: parent.left
+                anchors.horizontalCenter: parent.horizontalCenter
                 anchors.margins: keyContentMargin / 4
+                elide: Text.ElideRight
+                width: parent.width - keyContentMargin / 2
+                horizontalAlignment: Text.AlignHCenter
             }
             states: [
                 State {
