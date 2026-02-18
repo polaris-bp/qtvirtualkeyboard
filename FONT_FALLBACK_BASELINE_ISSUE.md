@@ -4,7 +4,10 @@
 
 Qt の TextInput / TextField で、日本語などの非ラテン文字を入力したときに
 テキストの表示位置がずれる（ジャンプする）現象について、
-ソースコードを検証した結果をまとめます。
+Qt のソースコードを逐一検証した結果をまとめます。
+
+**切り分けの結論: これは Qt 本体（qtbase + qtdeclarative）の問題であり、
+qtvirtualkeyboard 側には原因がありません。**
 
 ---
 
@@ -25,14 +28,27 @@ Qt の TextInput / TextField で、日本語などの非ラテン文字を入力
 
 テキスト入力欄は、文字を表示するための「行の高さ」を持っています。
 
-英語フォント（例：Roboto）の行の高さが **20px** だとします。
-日本語フォント（例：Noto CJK）の行の高さが **24px** だとします。
+- 英語フォント（例：Roboto）の行の高さが **20px** だとします
+- 日本語フォント（例：Noto CJK）の行の高さが **24px** だとします
 
 英語だけを入力しているときは、行の高さは 20px です。
 日本語を1文字入力すると、その文字が切れないように、行の高さが **24px** に拡大されます。
 
-この **行の高さの変化（20px → 24px）** が、テキストの表示位置に影響を与え、
+この **行の高さの変化（20px → 24px）** がテキストの表示位置に影響を与え、
 画面上でテキストがずれて見える原因です。
+
+### どのくらいずれるか
+
+テキスト入力欄の設定によって異なります：
+
+| 設定 | ずれ量 | 発生するか |
+|------|--------|-----------|
+| 上揃え（AlignTop） | 0px | 発生しない |
+| 上下中央揃え（VCenter） | 行高さの変化量 ÷ 2 | **発生する** |
+| 下揃え（AlignBottom） | 行高さの変化量 | **発生する** |
+
+一般的な TextField は上下中央揃え（VCenter）を使うため、
+ほとんどのアプリケーションで発生します。
 
 ---
 
@@ -46,132 +62,189 @@ Qt は、指定されたフォント（プライマリフォント）で表示�
 
 これ自体は正常で必要な機能です。
 
-### 2-2. 行の高さが変わる仕組み
+### 2-2. 行の高さが変わる仕組み（検証済み: 事実）
 
-Qt のテキストレイアウトエンジン（`QTextEngine::shapeText()`）は、
-一行の中で使われたすべてのフォントの高さを比較し、
-**一番大きい値を採用** します。
+Qt のテキストレイアウトエンジンは、一行の中で使われたすべてのフォントの
+高さ（ascent, descent, leading）を比較し、**一番大きい値を採用** します。
 
-```
-ソースコード: qtbase/src/gui/text/qtextengine.cpp 1449-1453行
+**根拠となるソースコード:**
 
-if (engineIdx != 0) {  // フォールバックフォントの場合
-    si.ascent  = qMax(actualFontEngine->ascent(),  si.ascent);
-    si.descent = qMax(actualFontEngine->descent(), si.descent);
-    si.leading = qMax(actualFontEngine->leading(), si.leading);
+```cpp
+// qtbase/src/gui/text/qtextengine.cpp  1449-1453行
+if (engineIdx != 0) {  // フォールバックフォント（非プライマリ）の場合
+    QFontEngine *actualFontEngine = static_cast<QFontEngineMulti *>(fontEngine)->engine(engineIdx);
+    si.ascent  = qMax(actualFontEngine->ascent(),  si.ascent);   // 大きい方を採用
+    si.descent = qMax(actualFontEngine->descent(), si.descent);   // 大きい方を採用
+    si.leading = qMax(actualFontEngine->leading(), si.leading);   // 大きい方を採用
 }
 ```
 
-これは**意図的な設計**です。フォールバックフォントの文字が
-切れて表示されることを防ぐために、一番大きい高さを使います。
+**解説:**
+- `engineIdx != 0` はプライマリフォント以外（＝フォールバックフォント）を意味する
+- `qMax(a, b)` は a と b の大きい方を返す関数
+- `si.ascent` 等は行のメトリクス（寸法情報）で、ここで更新される
+- これは**意図的な設計**。フォールバックフォントの文字が切れて表示されることを防ぐため
+- **これ自体はバグではない**
 
-**これはバグではありません。**
+### 2-3. コンテンツサイズが変わる仕組み（検証済み: 事実）
 
-### 2-3. Qt が行っている補償（ベースライン維持）
+行の高さが変わると、テキスト入力欄の「コンテンツの高さ」が変わります。
 
-Qt の開発者はこの問題を認識しており、テキスト描画時に補償を行っています。
+**根拠となるソースコード:**
 
+```cpp
+// qtdeclarative/src/quick/items/qquicktextinput.cpp  3044-3061行
+do {
+    line.setLineWidth(lineWidth);
+    line.setPosition(QPointF(0, height));
+    height += line.height();       // ← 行の高さを加算（フォールバック後は大きくなる）
+    width = qMax(width, line.naturalTextWidth());
+    line = m_textLayout.createLine();
+} while (line.isValid());
+// ...
+contentSize = QSizeF(width, height);   // ← コンテンツサイズに反映
 ```
-ソースコード: qtdeclarative/src/quick/items/qquicktextinput.cpp 1916-1918行
 
-// the y offset is there to keep the baseline constant
-// in case we have script changes in the text.
-// （テキスト内のスクリプト変更時にベースラインを一定に保つためのy補正）
+**解説:**
+- `line.height()` は 2-2節 で qMax された値を含む行の高さ
+- `contentSize` はテキスト入力欄が外部に報告する「中身の大きさ」
+- フォールバック発生前後で `contentSize.height` の値が変わる
+
+### 2-4. Qt が行っている補償（部分的に機能）
+
+Qt の開発者はこの問題を認識しており、テキスト描画時に
+ベースラインが動かないよう補償を行っています。
+
+**根拠となるソースコード:**
+
+```cpp
+// qtdeclarative/src/quick/items/qquicktextinput.cpp  1914-1918行
+QPointF offset(leftPadding(), topPadding());
+if (d->autoScroll && d->m_textLayout.lineCount() > 0) {
+    QFontMetricsF fm(d->font);
+    // the y offset is there to keep the baseline constant
+    // in case we have script changes in the text.
+    // （テキスト内のスクリプト変更時にベースラインを一定に保つためのy補正）
+    offset += -QPointF(d->hscroll,
+        d->vscroll + d->m_textLayout.lineAt(0).ascent() - fm.ascent());
+}
+```
+
+**解説（精密な数値トレース）:**
+- `fm.ascent()` = プライマリフォントの ascent（例: 14px）
+- `lineAt(0).ascent()` = qMax 集約された行の ascent（例: 18px）
+- `delta` = 18 - 14 = 4px（差分）
+- テキスト描画位置は `delta` ピクセル分**上にずらされる**
+- これにより、テキストのベースライン位置は `topPadding + fm.ascent()` で一定に保たれる
+
+**この補償は AlignTop の場合にのみ完全に機能します。**
+
+### 2-5. 補償が VCenter/AlignBottom で不完全な理由（検証済み: 欠陥）
+
+補償は描画位置を上にずらしますが、`contentSize.height` の変化による
+垂直スクロール値（vscroll）の再計算までは防げません。
+
+**根拠となるソースコード:**
+
+```cpp
+// qtdeclarative/src/quick/items/qquicktextinput.cpp  1808-1811行
+if (!autoScroll || heightUsed <= height) {
+    // text fits in br; use vscroll for alignment
+    vscroll = -QQuickTextUtil::alignedY(
+                heightUsed, height, vAlign & ~(Qt::AlignAbsolute|Qt::AlignHorizontal_Mask));
+}
+```
+
+**解説（VCenter の場合の精密なトレース）:**
+
+条件: 固定高さ 40px、topPadding = 5px、bottomPadding = 5px、
+      利用可能高さ = 40 - 5 - 5 = 30px
+
+| 状態 | contentSize.height | vscroll | 描画 offset.y | ベースライン位置 |
+|------|-------------------|---------|--------------|----------------|
+| 英語のみ (ascent=14, lineHeight=20) | 20px | -(30-20)/2 = **-5** | 5-(-5)-0 = **10** | 10+14 = **24px** |
+| 日本語入力後 (ascent=18, lineHeight=24) | 24px | -(30-24)/2 = **-3** | 5-(-3)-4 = **4** | 4+18 = **22px** |
+
+**ベースラインが 24px → 22px に移動。2px 上にずれる。**
+
+同じ計算を AlignTop で行うと：
+
+| 状態 | contentSize.height | vscroll | 描画 offset.y | ベースライン位置 |
+|------|-------------------|---------|--------------|----------------|
+| 英語のみ | 20px | **0** | 5-0-0 = **5** | 5+14 = **19px** |
+| 日本語入力後 | 24px | **0** | 5-0-4 = **1** | 1+18 = **19px** |
+
+**AlignTop ではベースラインは 19px のまま。ずれない。**
+
+VCenter で補償が不完全になる原因：
+1. contentSize.height が 20→24 に増加
+2. VCenter の vscroll が再計算される（-5 → -3 に変化）
+3. updatePaintNode の補償は delta=4 を引くが、vscroll が +2 変化するため、差し引き 2px 分ずれる
+4. AlignTop では vscroll が常に 0 なので、この問題は起きない
+
+### 2-6. カーソルとテキストの描画位置ずれ（検証済み: 欠陥）
+
+テキスト描画には 2-4節 の補償が適用されますが、
+カーソルの位置計算には **同じ補償が適用されていません**。
+
+**根拠となるソースコード:**
+
+```cpp
+// カーソル位置（qquicktextinput.cpp 873-874行）
+qreal x = l.cursorToX(c) - d->hscroll + leftPadding();
+qreal y = l.y() - d->vscroll + topPadding();
+//              ↑ delta 補償なし
+```
+
+```cpp
+// テキスト描画位置（qquicktextinput.cpp 1918行）
 offset += -QPointF(d->hscroll,
     d->vscroll + d->m_textLayout.lineAt(0).ascent() - fm.ascent());
+//              ↑ delta 補償あり
 ```
 
-この補償により、**テキストのベースライン（文字の底辺の位置）自体は
-フォールバックが起きても安定します。**
+**具体的な影響（AlignTop の場合）:**
 
-### 2-4. では何が問題なのか
+| 要素 | y 座標の計算 | 日本語入力後の値 |
+|------|-------------|----------------|
+| テキスト描画の先頭 | topPadding - vscroll - delta | 5 - 0 - 4 = **1px** |
+| カーソルの先頭 | l.y() - vscroll + topPadding | 0 - 0 + 5 = **5px** |
 
-問題は、**行の高さの変化そのもの** が他の部分に影響を与えることです。
+テキストは y=1px から始まるのに、カーソルは y=5px から始まる。
+カーソルがテキストより **4px 下にずれている**。
 
-#### 問題A：コンテンツサイズの変化
+ただし、カーソルとテキストの**ベースライン位置は一致**しています：
+- テキストのベースライン: 1 + 18(lineAscent) = 19px
+- カーソル位置 + fm.ascent: 5 + 14(fmAscent) = 19px
 
-行の高さが 20px → 24px に変わると、テキスト入力欄が報告する
-「コンテンツの高さ」（`contentSize.height`）も変わります。
-
-```
-ソースコード: qquicktextinput.cpp 3048-3061行
-
-height += line.height();  // ← 行の高さ（フォールバック後は大きくなる）
-// ...
-contentSize = QSizeF(width, height);  // ← コンテンツサイズに反映
-```
-
-この変化は以下の結果を引き起こします：
-
-- **暗黙の高さを使っている場合**（`implicitHeight`）：
-  テキスト入力欄自体の高さが変わり、周囲のレイアウトが再配置される
-
-- **固定高さ＋上下中央揃え（VCenter）の場合**：
-  コンテンツの高さが変わると、中央揃えの位置が再計算され、
-  テキスト全体が少し上に移動する
-
-  例（固定高さ 40px、上下パディング 5px の場合）：
-  ```
-  英語のみ：余白 = 40 - 20 - 10 = 10px → 上の余白 5px
-  日本語入力後：余白 = 40 - 24 - 10 = 6px → 上の余白 3px
-  → テキストが 2px 上にずれる
-  ```
-
-#### 問題B：カーソルとテキストの位置ずれ
-
-テキスト描画には上記の補償（2-3節参照）が適用されますが、
-カーソルの位置計算には**同じ補償が適用されていません**。
-
-```
-ソースコード: qquicktextinput.cpp 874行（カーソル位置）
-
-qreal y = l.y() - d->vscroll + topPadding();
-// ↑ 補償なし。プライマリフォントの高さで計算。
-```
-
-```
-ソースコード: qquicktextinput.cpp 1918行（テキスト描画位置）
-
-offset.y = topPadding - vscroll - (lineAscent - fmAscent);
-// ↑ 補償あり。フォールバックフォントの高さ差分を引いている。
-```
-
-この結果、テキストは上に補正されて描画されますが、
-カーソルはその補正を受けないため、**カーソルの上下端がテキストの
-上下端と数ピクセルずれます**。
-
-ただし、テキストのベースライン（文字の底辺）とカーソルのベースライン位置は一致しているため、
-この問題は微妙なものです。
+つまり、文字の底辺は揃うが、カーソルの上下端がテキストの上下端と合わない状態です。
 
 ---
 
-## 3. バグなのか、仕様なのか
+## 3. 責任の切り分け（自社 or Qt 本体）
 
-### バグと言える部分
+### Qt 本体（qtbase + qtdeclarative）側の問題
 
-| 問題 | 説明 | 根拠 |
-|------|------|------|
-| カーソル位置の不整合 | テキスト描画に適用される補償が、カーソル位置計算には適用されていない | 同じコンポーネント内で2つの計算が異なる基準を使っている |
-| 補償の不完全さ | 「ベースラインを一定に保つ」という意図がコメントに明記されているが、contentSize の変化による位置ずれは防げていない | コメントに記載された設計意図が完全には達成されていない |
+| 分類 | 内容 | ソースコードの場所 | 性質 |
+|------|------|-------------------|------|
+| 設計 | フォールバック時に qMax で行メトリクスを集約 | qtbase: qtextengine.cpp 1449-1453行 | 意図的な設計（バグではない） |
+| 設計の副作用 | contentSize.height がフォールバックで変化 | qtdeclarative: qquicktextinput.cpp 3048-3061行 | 設計の論理的帰結 |
+| **欠陥** | VCenter/AlignBottom で補償が不完全（vscroll の変化を考慮していない） | qtdeclarative: qquicktextinput.cpp 1808-1811, 1918行 | **バグ** |
+| **欠陥** | cursorRectangle に delta 補償がない | qtdeclarative: qquicktextinput.cpp 874行 | **バグ** |
 
-### バグではない部分（意図的な設計）
+### qtvirtualkeyboard 側の状況
 
-| 動作 | 説明 | 理由 |
-|------|------|------|
-| qMax による高さ集約 | フォールバックフォントの高さが大きければ、行の高さを拡大する | 文字が切れることを防ぐため |
-| contentSize の変化 | 行の高さが変われば、コンテンツサイズもそれに応じて変わる | コンテンツの実際のサイズを正確に報告するため |
-| ベースライン補償 | テキスト描画時に位置を補正する | 文字の底辺を安定させるため |
+| 確認項目 | 結果 |
+|----------|------|
+| ShadowInputControl の TextInput | verticalAlignment 未設定 → **AlignTop**（デフォルト）。ベースラインずれは発生しない |
+| ShadowInputControl の contentHeight | `shadowInput.contentHeight` を使用。フォールバックで変化するため、Flickable の contentHeight が変わる |
+| キーラベルの verticalAlignment | `Text.AlignVCenter` を使用（style.qml 108行等）。ただしキーラベルは入力中に変わらないので影響なし |
+| TextInput の既知バグ回避 | `positionToRectangle()` のパディングバグを手動で補正済み（tst_inputpanel.qml 2308行） |
 
-### 総合判断
+**結論: qtvirtualkeyboard 側に原因となるコードはありません。**
 
-**Qt 本体（qtdeclarative）に起因する問題**です。
-
-- 根本原因（フォントフォールバックで行高さが変わること）は意図的な設計です
-- しかし、その副作用（contentSize 変化によるテキスト位置ずれ、
-  カーソル位置の不整合）は**十分に対処されていない不具合（欠陥）**です
-- Qt 開発者がこの問題を認識していることは、updatePaintNode 内の
-  補償コードとコメントから明らかです
-- qtvirtualkeyboard 側に原因はなく、Qt 本体の問題の影響を受けています
+ユーザーが体験する「テキスト位置ずれ」は、**アプリケーション側の TextField** が
+VCenter を使っている場合に発生する Qt 本体の問題です。
 
 ---
 
@@ -179,56 +252,61 @@ offset.y = topPadding - vscroll - (lineAscent - fmAscent);
 
 この問題は qtvirtualkeyboard に限った問題ではありません。
 **Qt の TextInput / TextField を使うすべてのアプリケーション** で、
-以下の条件が揃うと発生します：
+以下の条件がすべて揃うと発生します：
 
 1. プライマリフォントでは表示できない文字を入力する
    （英語フォント＋日本語入力、など）
-2. フォールバックフォントの行高さがプライマリフォントより大きい
-3. テキスト入力欄が上下中央揃え（VCenter）を使っている、
-   または暗黙の高さ（implicitHeight）に依存している
+2. フォールバックフォントの ascent/descent がプライマリフォントより大きい
+3. テキスト入力欄が **VCenter または AlignBottom** を使っている、
+   **または** 暗黙の高さ（implicitHeight）に依存している
+
+逆に、以下の場合は発生しません：
+- AlignTop を使っている場合（ベースライン補償が完全に機能する）
+- プライマリフォントがフォールバックフォントより大きい場合（delta = 0）
+- フォントフォールバックが発生しない場合（同一フォントで全文字を描画）
 
 ---
 
-## 5. 検証に使用したソースコード
+## 5. 検証に使用したソースコード一覧
 
-| ファイル | バージョン | 確認内容 |
-|----------|-----------|----------|
-| `qtbase/src/gui/text/qtextengine.cpp` 1449-1453行 | Qt 5.x | qMax による ascent/descent/leading の集約 |
-| `qtdeclarative/src/quick/items/qquicktextinput.cpp` 1916-1918行 | Qt 5.x | updatePaintNode 内のベースライン補償コード |
-| `qtdeclarative/src/quick/items/qquicktextinput.cpp` 3086-3101行 | Qt 5.x | updateBaselineOffset のメトリクス計算 |
-| `qtdeclarative/src/quick/items/qquicktextinput.cpp` 860-883行 | Qt 5.x | cursorRectangle の位置計算（補償なし） |
-| `qtdeclarative/src/quick/items/qquicktextinput.cpp` 3042-3061行 | Qt 5.x | contentSize の計算 |
+| ファイル | 行番号 | 確認内容 |
+|----------|--------|----------|
+| `qtbase/src/gui/text/qtextengine.cpp` | 1440-1461 | qMax による ascent/descent/leading の集約。`engineIdx != 0` でフォールバック時のみ発動 |
+| `qtdeclarative/.../qquicktextinput.cpp` | 1914-1921 | updatePaintNode 内のベースライン補償。コメントで設計意図を明記 |
+| `qtdeclarative/.../qquicktextinput.cpp` | 1808-1811 | updateVerticalScroll の vscroll 計算。contentSize.height に依存 |
+| `qtdeclarative/.../qquicktextinput.cpp` | 3086-3101 | updateBaselineOffset。fm.ascent()（プライマリフォント）と surplusHeight を使用 |
+| `qtdeclarative/.../qquicktextinput.cpp` | 860-883 | cursorRectangle の位置計算。delta 補償なし |
+| `qtdeclarative/.../qquicktextinput.cpp` | 3044-3061 | contentSize の計算。line.height() を加算 |
+| `qtdeclarative/.../qquicktextinput.cpp` | 3067-3071 | implicitHeight の更新。contentSize.height + padding |
+| `qtvirtualkeyboard/src/components/ShadowInputControl.qml` | 68-76 | ShadowInput の TextInput。verticalAlignment 未設定（AlignTop） |
+| `qtvirtualkeyboard/tests/.../tst_inputpanel.qml` | 2308 | TextInput の既知バグ（padding 未反映）への回避コード |
 
 ---
 
 ## 6. 対処方法の方向性
 
-### Qt 本体の修正を待つ場合
+### A. Qt 本体の修正を求める場合（推奨）
 
-Qt の JIRA（bugreports.qt.io）にバグとして報告し、
-`QQuickTextInput` の以下の修正を依頼する：
+Qt の JIRA（bugreports.qt.io）にバグとして報告し、以下の修正を依頼する：
 
-- `cursorRectangle()` に `updatePaintNode()` と同じ補償を適用する
-- contentSize の高さを、フォールバックフォントの可能性を考慮して
-  事前に計算する（またはプライマリフォントの高さで固定する選択肢を提供する）
+1. **cursorRectangle() に delta 補償を追加**
+   - updatePaintNode と同じ `lineAt(0).ascent() - fm.ascent()` の補償を
+     cursorRectangle の y 座標計算に適用する
 
-### qtvirtualkeyboard 側で回避する場合
+2. **VCenter/AlignBottom 使用時の vscroll 再計算問題の解決**
+   - contentSize.height をプライマリフォント基準で固定するオプションの追加
+   - または、vscroll 計算で delta を考慮するよう修正
 
-- テキスト入力欄の高さを、想定されるフォールバックフォントの
-  最大行高さで固定する
-- または、contentSize の変化をフィルタリングして、
-  フォントフォールバックによる高さ変化を無視するロジックを追加する
+### B. アプリケーション側で回避する場合
 
----
+- TextField の高さを、想定されるフォールバックフォントの
+  最大行高さで事前に確保する
+- verticalAlignment を AlignTop に変更する
+  （デザイン上許容される場合のみ）
 
-## 7. 関連する Qt の既知情報
+### C. qtvirtualkeyboard 側で回避する場合（ShadowInputControl）
 
-- Qt 開発メーリングリスト（2016年3月）:
-  「Possible Bug in Qt Text Engine」で `QTextEngine::shapeText()` の
-  qMax 集約が CJK フォールバックで行高さを変える問題が報告されている
-- Sailfish OS の Qt フォーク: `updatePaintNode()` 内の補償コードに
-  "keep the baseline constant in case we have script changes" というコメントがあり、
-  Qt 開発者がこの問題を認識していたことを示している
-- Qt 6.8 では Eskil Abrahamsen Blomfeldt 氏による
-  フォントメトリクス処理の改善が行われているが、
-  この特定の問題が解決されたかは未確認
+現状の ShadowInputControl は AlignTop を使っているため、
+ベースラインずれは発生しません。ただし、contentHeight の変化が
+Flickable に伝播する影響を抑えたい場合は、
+最初のレイアウト時の contentHeight を固定値として保持する方法が考えられます。
