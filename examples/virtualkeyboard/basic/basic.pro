@@ -5,6 +5,7 @@ QT += qml quick
 QT_FOR_CONFIG += virtualkeyboard
 
 SOURCES += main.cpp
+HEADERS += fontchecker.h
 CONFIG += link_pkgconfig
 contains(CONFIG, static) {
     QT += svg

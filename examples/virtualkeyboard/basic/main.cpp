@@ -4,13 +4,20 @@
 #include <QQuickView>
 #include <QGuiApplication>
 #include <QQmlEngine>
+#include <QQmlContext>
+#include "fontchecker.h"
 
 int main(int argc, char *argv[])
 {
     qputenv("QT_IM_MODULE", QByteArray("qtvirtualkeyboard"));
 
     QGuiApplication app(argc, argv);
-    QQuickView view(QString("qrc:/%2").arg(MAIN_QML));
+
+    FontChecker fontChecker;
+
+    QQuickView view;
+    view.rootContext()->setContextProperty("fontChecker", &fontChecker);
+    view.setSource(QUrl(QString("qrc:/%1").arg(MAIN_QML)));
     if (view.status() == QQuickView::Error)
         return -1;
     view.setResizeMode(QQuickView::SizeRootObjectToView);
